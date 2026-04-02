@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SYSTEM_PROMPT, buildUserMessage } from "@/lib/system-prompt";
 import { generateMockAnalysis } from "@/lib/mock-analysis";
 import {
@@ -103,37 +103,26 @@ ${data.detailsRating}
 `.trim();
 }
 
-async function callAnthropic(
+async function callGemini(
   ids: string[],
   tipoAnalise: string,
   periodo: string,
   tom: string,
   contexto?: string
 ): Promise<string> {
-  const client = new Anthropic();
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+    systemInstruction: SYSTEM_PROMPT,
+  });
+
   const months = PERIOD_MONTHS[periodo] || 6;
   const userMessage = buildUserMessage({ ids, tipo_analise: tipoAnalise, periodo, contexto, tom });
 
-  // Se MCP_DATA_LAKE_URL estiver configurado, usar Claude com MCP direto
-  if (process.env.MCP_DATA_LAKE_URL) {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 8000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userMessage }],
-    });
-
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-  }
-
-  // Sem MCP: enviar com dados pré-buscados se disponíveis
+  // Dados pré-buscados se disponíveis
   const dataContexts: string[] = [];
 
   if (process.env.DATA_LAKE_FETCH_URL) {
-    // Futuro: integração direta com o Data Lake via API própria
     void months;
     void fetchDataLake;
     void buildDataContext;
@@ -143,17 +132,9 @@ async function callAnthropic(
     ? `\n\n---\n\n# DADOS PRÉ-BUSCADOS DO DATA LAKE\n\n${dataContexts.join("\n\n---\n\n")}`
     : "";
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 8000,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userMessage + contextBlock }],
-  });
-
-  return response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+  const result = await model.generateContent(userMessage + contextBlock);
+  const response = result.response;
+  return response.text();
 }
 
 export async function POST(request: NextRequest) {
@@ -167,18 +148,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Se não há ANTHROPIC_API_KEY, ir direto para mock
-    if (!process.env.ANTHROPIC_API_KEY) {
+    // Se não há GEMINI_API_KEY, ir direto para mock
+    if (!process.env.GEMINI_API_KEY) {
       const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
       return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
     }
 
-    // Tentar API Anthropic
+    // Tentar API Gemini
     try {
-      const analysis = await callAnthropic(ids, tipo_analise, periodo, tom, contexto);
+      const analysis = await callGemini(ids, tipo_analise, periodo, tom, contexto);
       return NextResponse.json({ success: true, analysis, ids });
     } catch (apiError: unknown) {
-      console.error("Erro na API Anthropic — usando fallback mock:", apiError);
+      console.error("Erro na API Gemini — usando fallback mock:", apiError);
 
       // Fallback para mock em caso de erro (sem crédito, rate limit, etc)
       const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
