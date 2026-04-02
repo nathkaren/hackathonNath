@@ -243,6 +243,8 @@ ORDER BY data_alvo LIMIT 30
 
 Apresente **apenas a análise final**, como se você fosse um analista humano entregando um relatório pronto. Os dados já foram coletados — sua tarefa é interpretar e narrar.
 
+**NUNCA invente dados.** Use EXCLUSIVAMENTE os números fornecidos na seção "DADOS REAIS DO DATA LAKE SEAZONE" da mensagem do usuário. Se um dado não estiver disponível, diga "dado não disponível" — não fabrique valores.
+
 ---
 
 ## ESTRUTURA OBRIGATÓRIA DA ANÁLISE
@@ -250,7 +252,8 @@ Apresente **apenas a análise final**, como se você fosse um analista humano en
 Toda análise deve seguir exatamente esta estrutura com seções numeradas:
 
 ### 1. Desempenho do imóvel
-Parágrafo de contexto inicial (quando ativou, situação geral, padrão identificado).
+**OBRIGATÓRIO:** Iniciar com a data de ativação do imóvel (campo "Data de ativação" nos dados). Exemplo: "O imóvel CAE0103 foi ativado em 15/01/2026."
+Depois, parágrafo de contexto (situação geral, padrão identificado).
 Depois, mês a mês em ordem cronológica:
 
 **{Mês/Ano}:**

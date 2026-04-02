@@ -3,99 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SYSTEM_PROMPT, buildUserMessage } from "@/lib/system-prompt";
 import { generateMockAnalysis } from "@/lib/mock-analysis";
 import { resolvePeriod } from "@/lib/periods";
-import {
-  queryAirbnbListingId,
-  queryPropertyMonthly,
-  queryCompetitorsMonthly,
-  queryCompetitorsOccupancy,
-  queryPerformanceDash,
-  queryStuckMinPrice,
-  queryLastOfferedPrice,
-  queryReviews,
-  queryDetailsRating,
-} from "@/lib/datalake";
-
-
-interface DataLakeResult {
-  idSeazone: string;
-  airbnbListingId: string | null;
-  propertyMonthly: string;
-  competitorsMonthly: string;
-  competitorsOccupancy: string;
-  performanceDash: string;
-  stuckMinPrice: string;
-  lastOfferedPrice: string;
-  reviews: string;
-  detailsRating: string;
-}
-
-async function fetchDataLake(
-  idSeazone: string,
-  months: number,
-  mcpQuery: (sql: string, source: string) => Promise<string>
-): Promise<DataLakeResult> {
-  const airbnbResult = await mcpQuery(queryAirbnbListingId(idSeazone), "sirius");
-  const airbnbMatch = airbnbResult.match(/\n([^,]+),(\d+)/);
-  const airbnbListingId = airbnbMatch ? airbnbMatch[2] : null;
-
-  const [propertyMonthly, competitorsMonthly, competitorsOccupancy, performanceDash, stuckMinPrice, lastOfferedPrice] =
-    await Promise.all([
-      mcpQuery(queryPropertyMonthly(idSeazone, months), "sirius"),
-      mcpQuery(queryCompetitorsMonthly(idSeazone, months), "sirius"),
-      mcpQuery(queryCompetitorsOccupancy(idSeazone, months), "sirius"),
-      mcpQuery(queryPerformanceDash(idSeazone), "gcp"),
-      mcpQuery(queryStuckMinPrice(idSeazone), "gcp"),
-      mcpQuery(queryLastOfferedPrice(idSeazone, months), "sirius"),
-    ]);
-
-  let reviews = "Sem airbnb_listing_id — não foi possível buscar reviews";
-  let detailsRating = "Sem airbnb_listing_id";
-  if (airbnbListingId) {
-    [reviews, detailsRating] = await Promise.all([
-      mcpQuery(queryReviews(airbnbListingId), "lake"),
-      mcpQuery(queryDetailsRating(airbnbListingId), "lake"),
-    ]);
-  }
-
-  return {
-    idSeazone, airbnbListingId, propertyMonthly, competitorsMonthly,
-    competitorsOccupancy, performanceDash, stuckMinPrice, lastOfferedPrice,
-    reviews, detailsRating,
-  };
-}
-
-function buildDataContext(data: DataLakeResult): string {
-  return `
-## DADOS DO DATA LAKE — ${data.idSeazone}
-
-### Airbnb Listing ID
-${data.airbnbListingId || "Não encontrado"}
-
-### Faturamento / Ocupação / Preço Mensal (Imóvel)
-${data.propertyMonthly}
-
-### Faturamento Médio Concorrentes (mensal)
-${data.competitorsMonthly}
-
-### Ocupação e Preço Médio Concorrentes (mensal)
-${data.competitorsOccupancy}
-
-### Performance Dash (GCP)
-${data.performanceDash}
-
-### Histórico de Pmin
-${data.stuckMinPrice}
-
-### Último Preço Enviado + Origem
-${data.lastOfferedPrice}
-
-### Reviews Recentes
-${data.reviews}
-
-### Nota e Número de Reviews
-${data.detailsRating}
-`.trim();
-}
+import { fetchPropertyData, formatDataContext } from "@/lib/fetch-property";
 
 interface AnalyzePayload {
   ids: string[];
@@ -110,51 +18,24 @@ interface AnalyzePayload {
   tom: string;
 }
 
-async function callGemini(payload: AnalyzePayload): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
-    systemInstruction: SYSTEM_PROMPT,
-  });
-
-  // Resolver período — usar dados do frontend ou calcular no backend
-  const period = payload.periodo_meses?.length
-    ? {
-        label: payload.periodo_label || payload.periodo,
-        months: payload.periodo_meses,
-        startDate: payload.periodo_start || "",
-        endDate: payload.periodo_end || "",
-        includesFuture: payload.periodo_futuro || false,
-      }
-    : resolvePeriod(payload.periodo);
-
-  const userMessage = buildUserMessage({
-    ids: payload.ids,
-    tipo_analise: payload.tipo_analise,
-    periodo_label: period.label,
-    periodo_meses: period.months,
-    periodo_start: period.startDate,
-    periodo_end: period.endDate,
-    periodo_futuro: period.includesFuture,
-    contexto: payload.contexto,
-    tom: payload.tom,
-  });
-
-  // Dados pré-buscados se disponíveis
-  const dataContexts: string[] = [];
-
-  if (process.env.DATA_LAKE_FETCH_URL) {
-    void fetchDataLake;
-    void buildDataContext;
+function resolvePeriodFromPayload(payload: AnalyzePayload) {
+  if (payload.periodo_meses?.length) {
+    return {
+      label: payload.periodo_label || payload.periodo,
+      months: payload.periodo_meses,
+      startDate: payload.periodo_start || "",
+      endDate: payload.periodo_end || "",
+      includesFuture: payload.periodo_futuro || false,
+    };
   }
-
-  const contextBlock = dataContexts.length > 0
-    ? `\n\n---\n\n# DADOS PRÉ-BUSCADOS DO DATA LAKE\n\n${dataContexts.join("\n\n---\n\n")}`
-    : "";
-
-  const result = await model.generateContent(userMessage + contextBlock);
-  const response = result.response;
-  return response.text();
+  const p = resolvePeriod(payload.periodo);
+  return {
+    label: p.label,
+    months: p.months,
+    startDate: p.startDate,
+    endDate: p.endDate,
+    includesFuture: p.includesFuture,
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -168,10 +49,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Resolver período para mock também
-    const period = payload.periodo_meses?.length
-      ? { label: payload.periodo_label || payload.periodo, months: payload.periodo_meses }
-      : resolvePeriod(payload.periodo);
+    const period = resolvePeriodFromPayload(payload);
 
     // Se não há GEMINI_API_KEY, ir direto para mock
     if (!process.env.GEMINI_API_KEY) {
@@ -179,10 +57,51 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
     }
 
-    // Tentar API Gemini
+    // Se tem MCP token, buscar dados reais do Data Lake
+    const hasMcp = !!process.env.MCP_DATA_LAKE_TOKEN;
+    const dataContexts: string[] = [];
+
+    if (hasMcp) {
+      try {
+        for (const id of payload.ids) {
+          const data = await fetchPropertyData(id.trim().toUpperCase(), period.startDate, period.endDate);
+          dataContexts.push(formatDataContext(data));
+        }
+      } catch (mcpError) {
+        console.error("Erro ao buscar dados do Data Lake:", mcpError);
+        // Continua sem dados — Gemini vai analisar sem contexto real
+      }
+    }
+
+    const contextBlock = dataContexts.length > 0
+      ? `\n\n---\n\n# DADOS REAIS DO DATA LAKE SEAZONE\nOs dados abaixo foram consultados diretamente do Data Lake. Use APENAS estes dados para a análise — NÃO invente números.\n\n${dataContexts.join("\n\n---\n\n")}`
+      : "\n\nATENÇÃO: Não foi possível acessar o Data Lake. Informe ao usuário que os dados reais não estão disponíveis e que a análise não pode ser gerada sem dados.";
+
+    // Montar mensagem
+    const userMessage = buildUserMessage({
+      ids: payload.ids,
+      tipo_analise: payload.tipo_analise,
+      periodo_label: period.label,
+      periodo_meses: period.months,
+      periodo_start: period.startDate,
+      periodo_end: period.endDate,
+      periodo_futuro: period.includesFuture,
+      contexto: payload.contexto,
+      tom: payload.tom,
+    });
+
+    // Chamar Gemini
     try {
-      const analysis = await callGemini(payload);
-      return NextResponse.json({ success: true, analysis, ids: payload.ids });
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.5-flash",
+        systemInstruction: SYSTEM_PROMPT,
+      });
+
+      const result = await model.generateContent(userMessage + contextBlock);
+      const analysis = result.response.text();
+
+      return NextResponse.json({ success: true, analysis, ids: payload.ids, realData: hasMcp && dataContexts.length > 0 });
     } catch (apiError: unknown) {
       console.error("Erro na API Gemini — usando fallback mock:", apiError);
       const mock = generateMockAnalysis(payload.ids, payload.tipo_analise, period.label, payload.tom, payload.contexto);
