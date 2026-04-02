@@ -1,55 +1,75 @@
-# Arquitetura - ImóvelInsight
+# Arquitetura — Seazone Analysis Platform
 
 ## Visão Geral
 
-O ImóvelInsight é um dashboard web para análise de desempenho de imóveis de aluguel por temporada. O sistema permite inserir códigos de imóveis e receber uma análise completa incluindo comparação com concorrentes, avaliação de saúde, plano de ação e conclusão.
+Plataforma interna de análise de desempenho de imóveis via Data Lake Seazone. O sistema permite inserir IDs Seazone e receber análises completas geradas por Claude Sonnet 4.6, incluindo desempenho mês a mês, comparação com concorrentes, diagnóstico de gargalos e plano de ação.
 
 ## Fluxo de Dados
 
 ```
-Usuário → [Código do Imóvel + Solicitação]
+Usuário → [ID Seazone + Tipo Análise + Período + Tom + Contexto]
          ↓
-   page.tsx (Client)
+   page.tsx (Client) → fetch /api/analyze
          ↓
-   mock-data.ts → PropertyData + CompetitorData
+   route.ts (Server) → API Anthropic (Claude Sonnet 4.6)
          ↓
-   analyzer.ts → AnalysisResult
+   System Prompt (system-prompt.ts) + Dados Data Lake
          ↓
-   Componentes de Visualização
+   Análise em Markdown
          ↓
-   Dashboard Renderizado
+   AnalysisRenderer.tsx → Dashboard Renderizado
 ```
 
-## Componentes
+## Camadas
 
-### Motor de Análise (`src/lib/analyzer.ts`)
+### 1. Frontend (`src/app/page.tsx`)
+- Formulário com campos: IDs, tipo de análise, período, tom, contexto
+- Chama `POST /api/analyze`
+- Renderiza resposta markdown via `AnalysisRenderer`
 
-1. **calculateHealth()** - Calcula score de saúde comparando métricas do imóvel com média dos concorrentes
-2. **generateActions()** - Gera plano de ação baseado nos gaps identificados
-3. **generateConclusion()** - Produz texto conclusivo com insights acionáveis
-4. **analyzeProperty()** - Orquestra toda a análise
+### 2. API Route (`src/app/api/analyze/route.ts`)
+- Recebe payload do frontend
+- Monta user message via `buildUserMessage()`
+- Envia para API Anthropic com system prompt completo
+- Suporta 2 modos:
+  - **Com MCP** (`MCP_DATA_LAKE_URL`): Claude consulta Data Lake diretamente
+  - **Sem MCP**: Claude analisa com base no prompt (fallback)
 
-### Componentes de UI (`src/components/`)
+### 3. Data Lake Queries (`src/lib/datalake.ts`)
+- Queries SQL validadas conforme system prompt Seazone
+- Sufixos dos databases Sirius configuráveis via env vars
+- Funções: `queryPropertyMonthly`, `queryCompetitorsMonthly`, `queryCompetitorsOccupancy`, `queryPerformanceDash`, `queryStuckMinPrice`, `queryLastOfferedPrice`, `queryReviews`, `queryDetailsRating`
 
-- **HealthGauge** - Visualização circular do health score com breakdown
-- **PerformanceChart** - Gráficos temporais (LineChart + BarChart) via Recharts
-- **CompetitorTable** - Tabela de benchmarking com indicadores visuais
-- **ActionPlanCard** - Lista priorizada de ações recomendadas
-- **ConclusionCard** - KPIs resumidos + análise textual
+### 4. System Prompt (`src/lib/system-prompt.ts`)
+- Prompt completo do analista Seazone (idêntico ao seazone_system_prompt.md)
+- Fórmulas SQL validadas, regras de negócio, formato de saída
+- Exporta `buildUserMessage()` e constantes de tipos/períodos
+
+### 5. Debug API (`src/app/api/datalake/route.ts`)
+- Retorna as queries SQL que seriam executadas (sem executar)
+- Útil para debug e validação
+
+## Componentes Legados (`src/components/`)
+Componentes da v1 (HealthGauge, PerformanceChart, CompetitorTable, ActionPlanCard, ConclusionCard) e dados mock (mock-data.ts, analyzer.ts, types.ts) permanecem no projeto mas não são usados pela página atual.
+
+## Variáveis de Ambiente
+
+| Variável | Obrigatória | Descrição |
+|----------|-------------|-----------|
+| `ANTHROPIC_API_KEY` | Sim | Chave da API Anthropic |
+| `MCP_DATA_LAKE_URL` | Não | URL do MCP Data Lake (quando disponível) |
+| `SIRIUS_COMPETITORSDATA` | Não | Override do database sirius (default: competitorsdata-ytphkan8jhr0) |
+| `SIRIUS_REVENUEDATA` | Não | Override do database sirius (default: revenuedata-ljkritvzunqm) |
+| `SIRIUS_SAPRONDATA` | Não | Override do database sirius (default: saprondata-9dkamzx2grjg) |
+| `SIRIUS_PRICINGDATA` | Não | Override do database sirius (default: pricingdata-pzprucbusfet) |
+| `SIRIUS_INPUTDATA` | Não | Override do database sirius (default: inputdata-kdatqapgmwx1) |
 
 ## Decisões Técnicas
 
 | Decisão | Justificativa |
 |---------|---------------|
-| Next.js App Router | Deploy otimizado no Vercel, SSR/SSG automático |
-| Client-side analysis | Sem necessidade de backend externo, resposta instantânea |
-| Tailwind CSS 4 | Classes utilitárias, tema escuro consistente |
-| Recharts | Biblioteca de gráficos mais popular para React |
-| Mock data | Dados simulados para demonstração do hackathon |
-
-## Extensibilidade
-
-Para conectar com dados reais no futuro:
-1. Substituir `mock-data.ts` por chamadas à API real
-2. O `analyzer.ts` continua funcionando sem alterações
-3. Adicionar autenticação na API route `/api/analyze`
+| Next.js App Router | Deploy Vercel, API routes server-side, sem backend separado |
+| Claude Sonnet 4.6 via API | Análise narrativa inteligente com regras de negócio Seazone |
+| System prompt no código | Idêntico ao md original, versionado, tipado |
+| react-markdown + remark-gfm | Renderização de tabelas, código, formatação do Claude |
+| Queries SQL pré-montadas | Validadas conforme fórmulas do system prompt, parametrizáveis |

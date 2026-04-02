@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ImóvelInsight - Dashboard de Desempenho",
+  title: "Seazone Analysis — Análise de Imóveis",
   description:
-    "Análise de desempenho de imóveis com comparação de concorrentes, avaliação de saúde e plano de ação",
+    "Plataforma interna de análise de desempenho de imóveis via Data Lake Seazone",
 };
 
 export default function RootLayout({

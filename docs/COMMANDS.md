@@ -1,4 +1,4 @@
-# Documentação de Comandos - ImóvelInsight
+# Documentação de Comandos — Seazone Analysis Platform
 
 ## Comandos do Projeto
 
