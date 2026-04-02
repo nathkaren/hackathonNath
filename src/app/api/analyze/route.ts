@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT, buildUserMessage } from "@/lib/system-prompt";
+import { generateMockAnalysis } from "@/lib/mock-analysis";
 import {
   queryAirbnbListingId,
   queryPropertyMonthly,
@@ -13,14 +14,12 @@ import {
   queryDetailsRating,
 } from "@/lib/datalake";
 
-const client = new Anthropic();
-
 // Período em meses conforme seleção do usuário
 const PERIOD_MONTHS: Record<string, number> = {
   ultimos_3_meses: 3,
   ultimos_6_meses: 6,
-  "2025": 15, // cobre jan/2025 até agora
-  "2026": 4,  // cobre jan/2026 até agora
+  "2025": 15,
+  "2026": 4,
 };
 
 interface DataLakeResult {
@@ -41,12 +40,10 @@ async function fetchDataLake(
   months: number,
   mcpQuery: (sql: string, source: string) => Promise<string>
 ): Promise<DataLakeResult> {
-  // 1. Obter airbnb_listing_id
   const airbnbResult = await mcpQuery(queryAirbnbListingId(idSeazone), "sirius");
   const airbnbMatch = airbnbResult.match(/\n([^,]+),(\d+)/);
   const airbnbListingId = airbnbMatch ? airbnbMatch[2] : null;
 
-  // 2. Buscar dados em paralelo
   const [propertyMonthly, competitorsMonthly, competitorsOccupancy, performanceDash, stuckMinPrice, lastOfferedPrice] =
     await Promise.all([
       mcpQuery(queryPropertyMonthly(idSeazone, months), "sirius"),
@@ -57,7 +54,6 @@ async function fetchDataLake(
       mcpQuery(queryLastOfferedPrice(idSeazone, months), "sirius"),
     ]);
 
-  // 3. Reviews (só se tiver airbnb_listing_id)
   let reviews = "Sem airbnb_listing_id — não foi possível buscar reviews";
   let detailsRating = "Sem airbnb_listing_id";
   if (airbnbListingId) {
@@ -68,16 +64,9 @@ async function fetchDataLake(
   }
 
   return {
-    idSeazone,
-    airbnbListingId,
-    propertyMonthly,
-    competitorsMonthly,
-    competitorsOccupancy,
-    performanceDash,
-    stuckMinPrice,
-    lastOfferedPrice,
-    reviews,
-    detailsRating,
+    idSeazone, airbnbListingId, propertyMonthly, competitorsMonthly,
+    competitorsOccupancy, performanceDash, stuckMinPrice, lastOfferedPrice,
+    reviews, detailsRating,
   };
 }
 
@@ -114,6 +103,59 @@ ${data.detailsRating}
 `.trim();
 }
 
+async function callAnthropic(
+  ids: string[],
+  tipoAnalise: string,
+  periodo: string,
+  tom: string,
+  contexto?: string
+): Promise<string> {
+  const client = new Anthropic();
+  const months = PERIOD_MONTHS[periodo] || 6;
+  const userMessage = buildUserMessage({ ids, tipo_analise: tipoAnalise, periodo, contexto, tom });
+
+  // Se MCP_DATA_LAKE_URL estiver configurado, usar Claude com MCP direto
+  if (process.env.MCP_DATA_LAKE_URL) {
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 8000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: userMessage }],
+    });
+
+    return response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+  }
+
+  // Sem MCP: enviar com dados pré-buscados se disponíveis
+  const dataContexts: string[] = [];
+
+  if (process.env.DATA_LAKE_FETCH_URL) {
+    // Futuro: integração direta com o Data Lake via API própria
+    void months;
+    void fetchDataLake;
+    void buildDataContext;
+  }
+
+  const contextBlock = dataContexts.length > 0
+    ? `\n\n---\n\n# DADOS PRÉ-BUSCADOS DO DATA LAKE\n\n${dataContexts.join("\n\n---\n\n")}`
+    : "";
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 8000,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: "user", content: userMessage + contextBlock }],
+  });
+
+  return response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { ids, tipo_analise, periodo, contexto, tom } = await request.json();
@@ -125,62 +167,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const months = PERIOD_MONTHS[periodo] || 6;
-    const userMessage = buildUserMessage({ ids, tipo_analise, periodo, contexto, tom });
+    // Se não há ANTHROPIC_API_KEY, ir direto para mock
+    if (!process.env.ANTHROPIC_API_KEY) {
+      const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
+      return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
+    }
 
-    // Se MCP_DATA_LAKE_URL estiver configurado, usar Claude com MCP direto
-    if (process.env.MCP_DATA_LAKE_URL) {
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 8000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: userMessage }],
-      });
-
-      const analysis = response.content
-        .filter((block) => block.type === "text")
-        .map((block) => (block.type === "text" ? block.text : ""))
-        .join("\n");
-
+    // Tentar API Anthropic
+    try {
+      const analysis = await callAnthropic(ids, tipo_analise, periodo, tom, contexto);
       return NextResponse.json({ success: true, analysis, ids });
+    } catch (apiError: unknown) {
+      console.error("Erro na API Anthropic — usando fallback mock:", apiError);
+
+      // Fallback para mock em caso de erro (sem crédito, rate limit, etc)
+      const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
+      return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
     }
-
-    // Fallback: chamar Claude sem MCP, com dados pré-buscados no contexto
-    // Quando DATA_LAKE_FETCH_URL estiver configurado, buscar dados primeiro
-    // Por enquanto, enviar sem dados pré-buscados (Claude responderá com base no prompt)
-    const dataContexts: string[] = [];
-
-    if (process.env.DATA_LAKE_FETCH_URL) {
-      // Futuro: integração direta com o Data Lake via API própria
-      // const mcpQuery = async (sql: string, source: string) => { ... };
-      // for (const id of ids) {
-      //   const data = await fetchDataLake(id, months, mcpQuery);
-      //   dataContexts.push(buildDataContext(data));
-      // }
-    }
-
-    const contextBlock = dataContexts.length > 0
-      ? `\n\n---\n\n# DADOS PRÉ-BUSCADOS DO DATA LAKE\n\n${dataContexts.join("\n\n---\n\n")}`
-      : "";
-
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 8000,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: userMessage + contextBlock,
-        },
-      ],
-    });
-
-    const analysis = response.content
-      .filter((block) => block.type === "text")
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("\n");
-
-    return NextResponse.json({ success: true, analysis, ids });
   } catch (error: unknown) {
     console.error("Erro na análise:", error);
     const message = error instanceof Error ? error.message : "Erro desconhecido";
