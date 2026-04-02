@@ -16,6 +16,7 @@ async function callMcp(toolName: string, args: Record<string, unknown>): Promise
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Accept": "application/json",
       "Authorization": `Bearer ${MCP_TOKEN}`,
     },
     body: JSON.stringify({
