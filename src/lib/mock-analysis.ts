@@ -1,6 +1,6 @@
 import { properties, getCompetitors } from "./mock-data";
 import { analyzeProperty } from "./analyzer";
-import { ANALYSIS_TYPES, PERIOD_LABELS } from "./system-prompt";
+import { ANALYSIS_TYPES } from "./system-prompt";
 
 /**
  * Gera análise mock no formato narrativo Seazone.
@@ -23,7 +23,7 @@ export function generateMockAnalysis(
 
   sections.push(
     `**Tipo de análise:** ${ANALYSIS_TYPES[tipoAnalise] || tipoAnalise}  \n` +
-    `**Período:** ${PERIOD_LABELS[periodo] || periodo}  \n` +
+    `**Período:** ${periodo}  \n` +
     `**Tom:** ${tom === "proprietario" ? "Para o proprietário" : "Interno — equipe CS"}` +
     (contexto ? `  \n**Contexto:** ${contexto}` : "") + "\n"
   );

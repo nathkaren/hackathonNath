@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { SYSTEM_PROMPT, buildUserMessage } from "@/lib/system-prompt";
 import { generateMockAnalysis } from "@/lib/mock-analysis";
+import { resolvePeriod } from "@/lib/periods";
 import {
   queryAirbnbListingId,
   queryPropertyMonthly,
@@ -14,13 +15,6 @@ import {
   queryDetailsRating,
 } from "@/lib/datalake";
 
-// Período em meses conforme seleção do usuário
-const PERIOD_MONTHS: Record<string, number> = {
-  ultimos_3_meses: 3,
-  ultimos_6_meses: 6,
-  "2025": 15,
-  "2026": 4,
-};
 
 interface DataLakeResult {
   idSeazone: string;
@@ -103,27 +97,53 @@ ${data.detailsRating}
 `.trim();
 }
 
-async function callGemini(
-  ids: string[],
-  tipoAnalise: string,
-  periodo: string,
-  tom: string,
-  contexto?: string
-): Promise<string> {
+interface AnalyzePayload {
+  ids: string[];
+  tipo_analise: string;
+  periodo: string;
+  periodo_label?: string;
+  periodo_meses?: string[];
+  periodo_start?: string;
+  periodo_end?: string;
+  periodo_futuro?: boolean;
+  contexto?: string;
+  tom: string;
+}
+
+async function callGemini(payload: AnalyzePayload): Promise<string> {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
     systemInstruction: SYSTEM_PROMPT,
   });
 
-  const months = PERIOD_MONTHS[periodo] || 6;
-  const userMessage = buildUserMessage({ ids, tipo_analise: tipoAnalise, periodo, contexto, tom });
+  // Resolver período — usar dados do frontend ou calcular no backend
+  const period = payload.periodo_meses?.length
+    ? {
+        label: payload.periodo_label || payload.periodo,
+        months: payload.periodo_meses,
+        startDate: payload.periodo_start || "",
+        endDate: payload.periodo_end || "",
+        includesFuture: payload.periodo_futuro || false,
+      }
+    : resolvePeriod(payload.periodo);
+
+  const userMessage = buildUserMessage({
+    ids: payload.ids,
+    tipo_analise: payload.tipo_analise,
+    periodo_label: period.label,
+    periodo_meses: period.months,
+    periodo_start: period.startDate,
+    periodo_end: period.endDate,
+    periodo_futuro: period.includesFuture,
+    contexto: payload.contexto,
+    tom: payload.tom,
+  });
 
   // Dados pré-buscados se disponíveis
   const dataContexts: string[] = [];
 
   if (process.env.DATA_LAKE_FETCH_URL) {
-    void months;
     void fetchDataLake;
     void buildDataContext;
   }
@@ -139,30 +159,33 @@ async function callGemini(
 
 export async function POST(request: NextRequest) {
   try {
-    const { ids, tipo_analise, periodo, contexto, tom } = await request.json();
+    const payload: AnalyzePayload = await request.json();
 
-    if (!ids || ids.length === 0) {
+    if (!payload.ids || payload.ids.length === 0) {
       return NextResponse.json(
         { error: "Informe pelo menos um ID de imóvel" },
         { status: 400 }
       );
     }
 
+    // Resolver período para mock também
+    const period = payload.periodo_meses?.length
+      ? { label: payload.periodo_label || payload.periodo, months: payload.periodo_meses }
+      : resolvePeriod(payload.periodo);
+
     // Se não há GEMINI_API_KEY, ir direto para mock
     if (!process.env.GEMINI_API_KEY) {
-      const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
+      const mock = generateMockAnalysis(payload.ids, payload.tipo_analise, period.label, payload.tom, payload.contexto);
       return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
     }
 
     // Tentar API Gemini
     try {
-      const analysis = await callGemini(ids, tipo_analise, periodo, tom, contexto);
-      return NextResponse.json({ success: true, analysis, ids });
+      const analysis = await callGemini(payload);
+      return NextResponse.json({ success: true, analysis, ids: payload.ids });
     } catch (apiError: unknown) {
       console.error("Erro na API Gemini — usando fallback mock:", apiError);
-
-      // Fallback para mock em caso de erro (sem crédito, rate limit, etc)
-      const mock = generateMockAnalysis(ids, tipo_analise, periodo, tom, contexto);
+      const mock = generateMockAnalysis(payload.ids, payload.tipo_analise, period.label, payload.tom, payload.contexto);
       return NextResponse.json({ success: true, analysis: mock.analysis, ids: mock.foundIds, mock: true });
     }
   } catch (error: unknown) {

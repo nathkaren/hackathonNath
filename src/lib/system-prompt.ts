@@ -431,33 +431,41 @@ export const ANALYSIS_TYPES: Record<string, string> = {
   precificacao: "Avaliação de precificação e datas comemorativas",
 };
 
-export const PERIOD_LABELS: Record<string, string> = {
-  ultimos_3_meses: "últimos 3 meses",
-  ultimos_6_meses: "últimos 6 meses",
-  "2025": "ano completo de 2025",
-  "2026": "ano de 2026 até o momento",
-};
-
 export function buildUserMessage({
   ids,
   tipo_analise,
-  periodo,
+  periodo_label,
+  periodo_meses,
+  periodo_start,
+  periodo_end,
+  periodo_futuro,
   contexto,
   tom,
 }: {
   ids: string[];
   tipo_analise: string;
-  periodo: string;
+  periodo_label: string;
+  periodo_meses: string[];
+  periodo_start: string;
+  periodo_end: string;
+  periodo_futuro: boolean;
   contexto?: string;
   tom: string;
 }): string {
   const idsStr = ids.join(", ");
+  const mesesStr = periodo_meses.join(", ");
   return `
 Imóvel(is): ${idsStr}
 Tipo de análise: ${ANALYSIS_TYPES[tipo_analise] || tipo_analise}
-Período: ${PERIOD_LABELS[periodo] || periodo}
+Período: ${periodo_label}
+Meses exatos a analisar: ${mesesStr}
+Data de início: ${periodo_start}
+Data de fim: ${periodo_end}
+${periodo_futuro ? "NOTA: O período inclui meses futuros — para esses meses, projetar com base em reservas confirmadas e tendências." : ""}
 Tom: ${tom === "proprietario" ? "Para envio ao proprietário — suavizar cenário, não expor erros internos" : "Interno — equipe CS"}
 ${contexto ? `\nContexto adicional: ${contexto}` : ""}
+
+IMPORTANTE: Analise EXATAMENTE os meses listados acima (${mesesStr}), na ordem cronológica. Não use outros meses. A data atual é ${new Date().toISOString().split("T")[0]}.
 
 Por favor, execute a análise completa conforme as instruções do system prompt.
   `.trim();

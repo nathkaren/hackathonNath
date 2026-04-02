@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Search, Building2, Loader2, Copy, ClipboardCheck } from "lucide-react";
 import { AnalysisRenderer } from "@/components/AnalysisRenderer";
+import { calculatePeriods } from "@/lib/periods";
 
 export default function Home() {
   const [ids, setIds] = useState("");
   const [tipoAnalise, setTipoAnalise] = useState("desempenho");
-  const [periodo, setPeriodo] = useState("ultimos_6_meses");
+  const [periodo, setPeriodo] = useState("ultimos4_atual");
   const [tom, setTom] = useState("interno");
+  const periods = useMemo(() => calculatePeriods(), []);
   const [contexto, setContexto] = useState("");
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState("");
@@ -29,6 +31,8 @@ export default function Home() {
       .map((id) => id.trim().toUpperCase())
       .filter(Boolean);
 
+    const selectedPeriod = periods.find((p) => p.key === periodo) || periods[3];
+
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -36,7 +40,12 @@ export default function Home() {
         body: JSON.stringify({
           ids: parsedIds,
           tipo_analise: tipoAnalise,
-          periodo,
+          periodo: selectedPeriod.key,
+          periodo_label: selectedPeriod.label,
+          periodo_meses: selectedPeriod.months,
+          periodo_start: selectedPeriod.startDate,
+          periodo_end: selectedPeriod.endDate,
+          periodo_futuro: selectedPeriod.includesFuture,
           tom,
           contexto: contexto || undefined,
         }),
@@ -141,10 +150,11 @@ export default function Home() {
                   onChange={(e) => setPeriodo(e.target.value)}
                   className="w-full bg-[#0d0d0d] border border-[#333333] rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500/60 focus:ring-1 focus:ring-blue-500/30 transition-all appearance-none"
                 >
-                  <option value="ultimos_3_meses">Últimos 3 meses</option>
-                  <option value="ultimos_6_meses">Últimos 6 meses</option>
-                  <option value="2025">Ano 2025 completo</option>
-                  <option value="2026">2026 até o momento</option>
+                  {periods.map((p) => (
+                    <option key={p.key} value={p.key}>
+                      {p.label} ({p.description})
+                    </option>
+                  ))}
                 </select>
               </div>
 
